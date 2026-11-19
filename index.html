@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="color-scheme" content="light dark">
+<title>Quiz question editor</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    /* Telegram fills the --tg-theme-* variables with the colours of the person's chat theme; the second value of
+       each is what a normal browser shows. */
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --bg2: var(--tg-theme-secondary-bg-color, #e9edf2);
+    --text: var(--tg-theme-text-color, #14181c);
+    --hint: var(--tg-theme-hint-color, #7b8794);
+    --link: var(--tg-theme-link-color, #2481cc);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --danger: var(--tg-theme-destructive-text-color, #d93a3a);
+    --line: rgba(128, 138, 150, .28);
+    --soft: rgba(128, 138, 150, .12);
+    --good: #2ea44f;
+    --radius: 18px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--bg2);
+    /* a faint chat wallpaper */
+    background-image:
+      radial-gradient(circle at 20% 15%, var(--soft) 0 2px, transparent 3px),
+      radial-gradient(circle at 70% 60%, var(--soft) 0 2px, transparent 3px);
+    background-size: 46px 46px, 62px 62px;
+    color: var(--text);
+    font: 16px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Bengali", sans-serif;
+    padding-bottom: calc(40px + env(safe-area-inset-bottom));
+  }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; padding: 0; }
+  textarea { font: inherit; color: inherit; border: 0; background: none; outline: 0; resize: none; width: 100%; padding: 0; margin: 0; overflow: hidden; display: block; }
+  svg { width: 1em; height: 1em; display: block; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ------------------------------------------------------------ top bar: chat header + search */
+  .top { position: sticky; top: 0; z-index: 5; background: var(--bg); box-shadow: 0 1px 0 var(--line); padding-top: env(safe-area-inset-top); }
+  .chat-head { display: flex; align-items: center; gap: 12px; padding: 10px 14px 6px; }
+  .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: var(--accent-text); display: grid; place-items: center; font-weight: 600; font-size: 18px; flex: none; }
+  .chat-title { min-width: 0; }
+  .chat-title b { display: block; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chat-title small { color: var(--hint); font-size: 13px; }
+  .search { display: flex; align-items: center; gap: 8px; margin: 6px 14px 10px; padding: 0 12px; height: 38px; border-radius: 19px; background: var(--soft); }
+  .search svg { color: var(--hint); font-size: 18px; flex: none; }
+  .search input { flex: 1; min-width: 0; border: 0; background: none; outline: 0; font: inherit; color: var(--text); height: 100%; }
+  .search input::placeholder { color: var(--hint); }
+  .search .clear { color: var(--hint); font-size: 18px; display: none; }
+  .search.has-text .clear { display: block; }
+
+  /* ----------------------------------------------------------------------- the cards (poll bubbles) */
+  .feed { padding: 14px 12px 0; display: flex; flex-direction: column; gap: 14px; max-width: 640px; margin: 0 auto; }
+  .card {
+    background: var(--bg); border-radius: var(--radius) var(--radius) var(--radius) 5px; padding: 12px 14px 12px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .12); position: relative; content-visibility: auto; contain-intrinsic-size: auto 340px;
+    transition: box-shadow .15s, opacity .2s, transform .2s;
+  }
+  .card.dirty { box-shadow: 0 0 0 2px var(--accent), 0 1px 2px rgba(0, 0, 0, .12); }
+  .card.leaving { opacity: 0; transform: scale(.96); }
+  .card[hidden] { display: none; }
+  .tag { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--hint); margin-bottom: 4px; }
+  .tag .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: none; }
+  .card.dirty .tag .dot { display: block; }
+  .q-row { display: flex; align-items: flex-start; gap: 8px; }
+  .q-text { font-weight: 600; font-size: 17px; padding: 4px 0 6px; border-bottom: 1.5px solid var(--line); }
+  .q-text:focus, .o-text:focus, .e-text:focus { border-bottom-color: var(--accent); }
+  .icon-btn { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font-size: 19px; flex: none; color: var(--hint); background: var(--soft); }
+  .icon-btn.del { color: var(--danger); }
+  .icon-btn:active { filter: brightness(.9); }
+  .opts { list-style: none; margin: 8px 0 4px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .opt { display: flex; align-items: center; gap: 10px; min-height: 40px; }
+  .tick { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--hint); display: grid; place-items: center; flex: none; color: transparent; font-size: 16px; transition: background .12s, border-color .12s; }
+  .tick[aria-checked="true"] { background: var(--good); border-color: var(--good); color: #fff; }
+  .o-text { padding: 7px 0 5px; border-bottom: 1px solid var(--line); }
+  .rm { width: 30px; height: 30px; display: grid; place-items: center; font-size: 22px; color: var(--hint); flex: none; border-radius: 50%; }
+  .rm[disabled] { opacity: .25; cursor: default; }
+  .add { width: 100%; margin-top: 6px; height: 38px; border-radius: 12px; background: var(--soft); color: var(--accent); font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .add[disabled] { opacity: .4; cursor: default; }
+
+  /* explanation: the part the sketch left out. A soft note under the options, like the lamp message Telegram shows. */
+  .expl { margin-top: 10px; padding: 8px 10px 6px; border-radius: 12px; background: var(--soft); }
+  .expl label { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; color: var(--hint); margin-bottom: 2px; }
+  .expl .count.over { color: var(--danger); font-weight: 600; }
+  .e-text { padding: 3px 0 4px; border-bottom: 1px solid transparent; font-size: 15px; min-height: 24px; }
+  .e-text::placeholder, .q-text::placeholder, .o-text::placeholder { color: var(--hint); font-weight: 400; }
+
+  .err { color: var(--danger); font-size: 13px; margin-top: 8px; display: none; }
+  .err.show { display: block; }
+  .save { display: none; width: 100%; margin-top: 10px; height: 42px; border-radius: 12px; background: var(--accent); color: var(--accent-text); font-weight: 600; align-items: center; justify-content: center; gap: 8px; }
+  .card.dirty .save { display: flex; }
+  .save[disabled] { opacity: .45; cursor: default; }
+  .spin { width: 16px; height: 16px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------------------------------------------------------------------------- states, toast */
+  .state { text-align: center; color: var(--hint); padding: 60px 24px; }
+  .state p { margin: 8px 0; }
+  .state .retry { margin-top: 10px; padding: 10px 18px; border-radius: 12px; background: var(--accent); color: var(--accent-text); font-weight: 600; }
+  .toast { position: fixed; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom)); transform: translate(-50%, 20px); background: rgba(30, 34, 40, .94); color: #fff; padding: 10px 16px; border-radius: 14px; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: 88vw; text-align: center; z-index: 10; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .toast.bad { background: rgba(190, 40, 40, .95); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="chat-head">
+    <div class="avatar" id="avatar">?</div>
+    <div class="chat-title"><b id="title">Question editor</b><small id="subtitle">Loading…</small></div>
+  </div>
+  <label class="search" id="searchBox">
+    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <input id="search" type="search" placeholder="Search" autocomplete="off" enterkeyhint="search">
+    <button class="clear" id="clear" aria-label="Clear search" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg></button>
+  </label>
+</div>
+
+<main class="feed" id="feed"></main>
+<div class="state" id="state"><div class="spin" style="margin:0 auto 12px"></div><p>Loading…</p></div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ------------------------------------------------------------------------------------------ settings
+  // Optional, but safer: put your Worker's address here (for example "https://quizbot-cf.you.workers.dev"). The
+  // editor then only ever talks to that address. Left empty, it uses the address the bot puts in the link.
+  const API_BASE = "";
+
+  const MIN_OPTIONS = 2, MAX_OPTIONS = 12, EXPLANATION_MAX = 200, EXPLANATION_MAX_BREAKS = 2, MAX_TOTAL = 3500;
+
+  const tg = window.Telegram && window.Telegram.WebApp;
+  const params = new URLSearchParams(location.search);
+  const DEMO = params.get("demo") === "1";
+  const quizId = params.get("q") || "";
+  const apiBase = (API_BASE || params.get("api") || "").replace(/\/+$/, "");
+  const initData = (tg && tg.initData) || "";
+
+  const $ = (id) => document.getElementById(id);
+  const feed = $("feed"), stateBox = $("state"), toastBox = $("toast");
+
+  // --------------------------------------------------------------------------------------------- helpers
+  const h = (tag, attrs = {}, ...kids) => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") el.className = v;
+      else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+      else if (v === true) el.setAttribute(k, "");
+      else if (v !== false && v != null) el.setAttribute(k, v);
+    }
+    for (const kid of kids.flat()) el.append(kid && kid.nodeType ? kid : document.createTextNode(kid ?? ""));
+    return el;
+  };
+  const svg = (inner) => { const w = document.createElement("span"); w.innerHTML = `<svg viewBox="0 0 24 24">${inner}</svg>`; return w.firstChild; };
+  const ICON = {
+    trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
+    minus: '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
+    check: '<path d="M5 13l4 4L19 7"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+  };
+  const len = (s) => Array.from(s).length;
+  const clone = (q) => JSON.parse(JSON.stringify(q));
+
+  let toastTimer;
+  function toast(text, bad = false) {
+    toastBox.textContent = text;
+    toastBox.classList.toggle("bad", bad);
+    toastBox.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastBox.classList.remove("show"), bad ? 4200 : 2200);
+  }
+  const haptic = (kind) => { try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred(kind); } catch (_) {} };
+  const confirmAsk = (text) => new Promise((resolve) => {
+    if (tg && tg.showConfirm) tg.showConfirm(text, (ok) => resolve(!!ok));
+    else resolve(window.confirm(text));
+  });
+  const alertUser = (text) => new Promise((resolve) => {
+    if (tg && tg.showAlert) tg.showAlert(text, () => resolve());
+    else { window.alert(text); resolve(); }
+  });
+
+  // The same clean-up and rules as the Worker (src/qparser.js); the Worker checks again, this just tells you sooner.
+  const one = (t) => String(t == null ? "" : t).replace(/[\u200b\u200c\u200d\u2060\ufeff]/g, "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  function norm(q) {
+    return {
+      text: one(q.text),
+      options: q.options.map(one),
+      correct: [...new Set(q.correct)].sort((a, b) => a - b),
+      explanation: String(q.explanation || "").replace(/[\u200b\u200c\u200d\u2060\ufeff]/g, "").replace(/\r\n?/g, "\n").split("\n").map((l) => l.trim()).join("\n").trim(),
+    };
+  }
+  function problemOf(q) {
+    const n = q.options.length;
+    if (!q.text) return "The question text is empty.";
+    if (n < MIN_OPTIONS) return `At least ${MIN_OPTIONS} options are needed.`;
+    if (n > MAX_OPTIONS) return `At most ${MAX_OPTIONS} options are allowed.`;
+    if (q.options.some((o) => !o)) return "An option is empty. Fill it in or remove it.";
+    if (new Set(q.options).size !== n) return "Two options have exactly the same text.";
+    if (!q.correct.length) return "Mark at least one correct answer (tap a circle).";
+    if (q.correct.length === n) return "Not every option can be correct.";
+    const e = len(q.explanation);
+    if (e > EXPLANATION_MAX) return `The explanation is ${e} characters; Telegram allows ${EXPLANATION_MAX}.`;
+    if (q.explanation.split("\n").length - 1 > EXPLANATION_MAX_BREAKS) return "The explanation can have 3 lines at most.";
+    if (len(q.text) + q.options.reduce((a, o) => a + len(o), 0) + e > MAX_TOTAL) return "This question is too long.";
+    return null;
+  }
+  const sameQ = (a, b) => JSON.stringify(norm(a)) === JSON.stringify(norm(b));
+
+  // ------------------------------------------------------------------------------------- talking to the Worker
+  async function call(path, body) {
+    if (DEMO) return demoApi(path, body);
+    let res;
+    try {
+      res = await fetch(apiBase + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ initData, ...body }) });
+    } catch (e) {
+      return { status: 0, json: { ok: false, error: "Can't reach the bot's server. Check your connection and try again." } };
+    }
+    let json = null;
+    try { json = await res.json(); } catch (_) { json = { ok: false, error: "Unexpected answer from the server." }; }
+    return { status: res.status, json };
+  }
+
+  // Demo (add ?demo=1 to the page address): a small quiz in memory, no Telegram and no server needed.
+  let demoQuiz = null;
+  async function demoApi(path, body) {
+    await new Promise((r) => setTimeout(r, 250));
+    if (!demoQuiz) demoQuiz = { id: "demo", name: "Human body (demo)", negMark: 0.25, questions: [
+      { text: "Which blood vessel carries oxygenated blood away from the heart?", options: ["Pulmonary artery", "Aorta", "Vena cava", "Pulmonary vein"], correct: [1], explanation: "The aorta carries oxygen-rich blood to the body." },
+      { text: "What is 1+1?", options: ["7", "5", "2", "0+2"], correct: [2, 3], explanation: "" },
+      { text: "Which of these are mammals?", options: ["Whale", "Bat", "Shark", "Penguin"], correct: [0, 1], explanation: "Whales and bats are mammals.\nSharks are fish, penguins are birds." },
+      { text: "ঢাকা কোন দেশের রাজধানী?", options: ["ভারত", "বাংলাদেশ", "নেপাল"], correct: [1], explanation: "" },
+    ] };
+    const qs = demoQuiz.questions;
+    if (path === "/api/quiz") return { status: 200, json: { ok: true, quiz: clone(demoQuiz) } };
+    const i = body.index;
+    if (path === "/api/question/save") {
+      const q = norm(body.question), p = problemOf(q);
+      if (p) return { status: 400, json: { ok: false, error: "Can't save: " + p } };
+      qs[i] = q;
+      return { status: 200, json: { ok: true, question: q, notified: false } };
+    }
+    if (qs.length <= 1) return { status: 400, json: { ok: false, error: "A quiz needs at least one question, so the last one can't be deleted." } };
+    qs.splice(i, 1);
+    return { status: 200, json: { ok: true, notified: false } };
+  }
+
+  // Everything that talks to the server runs one after the other, so question numbers can't get mixed up.
+  let queue = Promise.resolve();
+  const inOrder = (fn) => { const run = queue.then(fn, fn); queue = run.then(() => {}, () => {}); return run; };
+
+  // ----------------------------------------------------------------------------------------------- the model
+  const state = { quiz: null, cards: [], nextUid: 1, term: "" };
+
+  function setClosingConfirmation() {
+    if (!tg) return;
+    const dirty = state.cards.some((c) => isDirty(c));
+    try { dirty ? tg.enableClosingConfirmation() : tg.disableClosingConfirmation(); } catch (_) {}
+  }
+  const isDirty = (card) => !sameQ(card.q, card.orig);
+
+  function haystack(card) {
+    return [card.q.text, ...card.q.options, card.q.explanation].join("\n").toLowerCase();
+  }
+
+  // -------------------------------------------------------------------------------------------- rendering
+  function autosize(el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }
+  function autosizeAll(root = feed) { root.querySelectorAll("textarea").forEach((t) => { if (t.offsetParent !== null) autosize(t); }); }
+
+  function buildCard(card) {
+    const el = h("article", { class: "card", "data-uid": card.uid });
+    card.el = el;
+
+    const num = h("span", {});
+    const qText = h("textarea", { class: "q-text", rows: 1, placeholder: "Question", "aria-label": "Question text" });
+    qText.value = card.q.text;
+    qText.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); qText.blur(); } });
+    qText.addEventListener("input", () => { qText.value = qText.value.replace(/[\r\n]+/g, " "); card.q.text = qText.value; autosize(qText); refresh(card); });
+    const del = h("button", { class: "icon-btn del", type: "button", "aria-label": "Delete question", title: "Delete question", onclick: () => deleteCard(card) }, svg(ICON.trash));
+
+    const list = h("ul", { class: "opts" });
+    const add = h("button", { class: "add", type: "button", onclick: () => addOption(card) }, svg(ICON.plus), "Add");
+
+    const eText = h("textarea", { class: "e-text", rows: 1, placeholder: "Add an explanation (optional)", "aria-label": "Explanation" });
+    eText.value = card.q.explanation;
+    const count = h("span", { class: "count" });
+    eText.addEventListener("input", () => { card.q.explanation = eText.value; autosize(eText); refresh(card); });
+    const expl = h("div", { class: "expl" }, h("label", {}, h("span", {}, "💡 Explanation · shown after a wrong answer"), count), eText);
+
+    const err = h("div", { class: "err", role: "alert" });
+    const save = h("button", { class: "save", type: "button", onclick: () => saveCard(card) }, "Save");
+
+    el.append(h("div", { class: "tag" }, h("span", { class: "dot" }), num), h("div", { class: "q-row" }, qText, del), list, add, expl, err, save);
+    Object.assign(card, { numEl: num, listEl: list, addEl: add, countEl: count, errEl: err, saveEl: save, qEl: qText, eEl: eText });
+    renderOptions(card);
+    refresh(card);
+    return el;
+  }
+
+  function renderOptions(card) {
+    card.listEl.replaceChildren();
+    const many = card.q.options.length;
+    card.q.options.forEach((opt, i) => {
+      const correct = card.q.correct.includes(i);
+      const tick = h("button", {
+        class: "tick", type: "button", role: "checkbox", "aria-checked": String(correct), "aria-label": "Correct answer",
+        onclick: () => {
+          const at = card.q.correct.indexOf(i);
+          if (at >= 0) card.q.correct.splice(at, 1); else card.q.correct.push(i);
+          tick.setAttribute("aria-checked", String(card.q.correct.includes(i)));
+          refresh(card);
+        },
+      }, svg(ICON.check));
+      const text = h("textarea", { class: "o-text", rows: 1, placeholder: `Option ${i + 1}`, "aria-label": `Option ${i + 1}` });
+      text.value = opt;
+      text.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); text.blur(); } });
+      text.addEventListener("input", () => { text.value = text.value.replace(/[\r\n]+/g, " "); card.q.options[i] = text.value; autosize(text); refresh(card); });
+      const rm = h("button", { class: "rm", type: "button", "aria-label": "Remove option", title: "Remove option", disabled: many <= MIN_OPTIONS, onclick: () => removeOption(card, i) }, svg(ICON.minus));
+      card.listEl.append(h("li", { class: "opt" }, tick, text, rm));
+    });
+    autosizeAll(card.el);
+  }
+
+  /** Update everything that depends on the current text of a card (dirty mark, errors, counters). */
+  function refresh(card) {
+    const q = norm(card.q);
+    const dirty = isDirty(card);
+    const problem = dirty ? problemOf(q) : null;
+    card.el.classList.toggle("dirty", dirty);
+    card.errEl.textContent = problem || "";
+    card.errEl.classList.toggle("show", !!problem);
+    card.saveEl.disabled = !!problem || card.saving;
+    card.addEl.disabled = card.q.options.length >= MAX_OPTIONS;
+    const e = len(q.explanation);
+    card.countEl.textContent = `${e}/${EXPLANATION_MAX}`;
+    card.countEl.classList.toggle("over", e > EXPLANATION_MAX);
+    setClosingConfirmation();
+  }
+
+  function renumber() {
+    state.cards.forEach((c, i) => { c.numEl.textContent = `Quiz · question ${i + 1} of ${state.cards.length}`; });
+    $("subtitle").textContent = `${state.cards.length} question${state.cards.length === 1 ? "" : "s"} · negative marking ${state.quiz.negMark > 0 ? "−" + state.quiz.negMark : "off"}`;
+  }
+
+  function addOption(card) {
+    if (card.q.options.length >= MAX_OPTIONS) return;
+    card.q.options.push("");
+    renderOptions(card);
+    refresh(card);
+    const boxes = card.listEl.querySelectorAll(".o-text");
+    boxes[boxes.length - 1].focus();
+  }
+
+  function removeOption(card, i) {
+    if (card.q.options.length <= MIN_OPTIONS) return;
+    card.q.options.splice(i, 1);
+    card.q.correct = card.q.correct.filter((c) => c !== i).map((c) => (c > i ? c - 1 : c));
+    renderOptions(card);
+    refresh(card);
+  }
+
+  // ---------------------------------------------------------------------------------------------- search
+  function applySearch() {
+    const term = state.term.trim().toLowerCase();
+    let shown = 0;
+    for (const card of state.cards) {
+      const match = !term || haystack(card).includes(term);
+      card.el.hidden = !match;
+      if (match) shown += 1;
+    }
+    let empty = $("empty");
+    if (!empty) { empty = h("div", { class: "state", id: "empty" }, h("p", {}, "🔍"), h("p", {}, "No question matches your search.")); feed.after(empty); }
+    empty.hidden = shown !== 0 || !state.cards.length;
+    if (term) $("subtitle").textContent = `${shown} of ${state.cards.length} question${state.cards.length === 1 ? "" : "s"} match`;
+    else renumber();
+    requestAnimationFrame(() => autosizeAll());
+  }
+
+  // ------------------------------------------------------------------------------------- save and delete
+  async function saveCard(card) {
+    if (card.saving) return;
+    const question = norm(card.q);
+    const problem = problemOf(question);
+    if (problem) return refresh(card);
+    card.saving = true;
+    card.saveEl.replaceChildren(h("span", { class: "spin" }), "Saving…");
+    card.saveEl.disabled = true;
+    const { status, json } = await inOrder(() => call("/api/question/save", { quizId, index: card.sid, original: card.orig, question }));
+    card.saving = false;
+    card.saveEl.replaceChildren("Save");
+    if (json && json.ok) {
+      card.orig = clone(json.question);
+      card.q = clone(json.question);
+      card.qEl.value = card.q.text;
+      card.eEl.value = card.q.explanation;
+      autosize(card.qEl); autosize(card.eEl);
+      renderOptions(card);
+      refresh(card);
+      haptic("success");
+      toast(json.unchanged ? "Nothing changed" : json.notified ? "Saved ✓  The change was sent to your chat" : "Saved ✓");
+      return;
+    }
+    haptic("error");
+    if (status === 409) { await alertUser(json.error); return load(true); }
+    refresh(card);
+    card.errEl.textContent = (json && json.error) || "Could not save.";
+    card.errEl.classList.add("show");
+    toast((json && json.error) || "Could not save.", true);
+  }
+
+  async function deleteCard(card) {
+    const ok = await confirmAsk("Delete this question? It will be removed from the quiz, and sent to you in the chat so you can keep it.");
+    if (!ok) return;
+    const { status, json } = await inOrder(() => call("/api/question/delete", { quizId, index: card.sid, original: card.orig }));
+    if (json && json.ok) {
+      const gone = card.sid;
+      state.cards = state.cards.filter((c) => c !== card);
+      for (const c of state.cards) if (c.sid > gone) c.sid -= 1;
+      card.el.classList.add("leaving");
+      setTimeout(() => { card.el.remove(); applySearch(); }, 180);
+      renumber();
+      setClosingConfirmation();
+      haptic("success");
+      toast(json.notified ? "Deleted ✓  Sent to your chat" : "Deleted ✓");
+      return;
+    }
+    haptic("error");
+    if (status === 409) { await alertUser(json.error); return load(true); }
+    toast((json && json.error) || "Could not delete.", true);
+  }
+
+  // ------------------------------------------------------------------------------------------------ loading
+  function showState(html) { stateBox.hidden = false; stateBox.replaceChildren(...html); feed.replaceChildren(); const e = $("empty"); if (e) e.hidden = true; }
+
+  async function load(keepSearch = false) {
+    if (!DEMO && (!initData || !apiBase || !quizId)) {
+      showState([h("p", {}, "📝"), h("p", {}, "Open this editor from the bot:"), h("p", {}, "/editmyquiz → Edit Question → choose a quiz.")]);
+      $("subtitle").textContent = "Not opened from Telegram";
+      return;
+    }
+    showState([h("div", { class: "spin", style: "margin:0 auto 12px" }), h("p", {}, "Loading…")]);
+    const { json } = await call("/api/quiz", { quizId });
+    if (!json || !json.ok) {
+      showState([h("p", {}, "⚠️"), h("p", {}, (json && json.error) || "Could not load the quiz."), h("button", { class: "retry", type: "button", onclick: () => load() }, "Try again")]);
+      $("subtitle").textContent = "Could not load";
+      return;
+    }
+    state.quiz = json.quiz;
+    state.cards = json.quiz.questions.map((q, i) => ({ uid: state.nextUid++, sid: i, orig: clone(q), q: clone(q), saving: false }));
+    stateBox.hidden = true;
+    $("title").textContent = json.quiz.name;
+    $("avatar").textContent = Array.from(json.quiz.name.trim())[0] || "?";
+    document.title = json.quiz.name;
+    feed.replaceChildren(...state.cards.map(buildCard));
+    if (!keepSearch) { state.term = ""; $("search").value = ""; $("searchBox").classList.remove("has-text"); }
+    renumber();
+    applySearch();
+    requestAnimationFrame(() => autosizeAll());
+    setClosingConfirmation();
+  }
+
+  $("search").addEventListener("input", (e) => { state.term = e.target.value; $("searchBox").classList.toggle("has-text", !!e.target.value); applySearch(); });
+  $("clear").addEventListener("click", () => { $("search").value = ""; state.term = ""; $("searchBox").classList.remove("has-text"); applySearch(); $("search").focus(); });
+  window.addEventListener("resize", () => autosizeAll());
+
+  if (tg) { try { tg.ready(); tg.expand(); tg.setHeaderColor && tg.setHeaderColor("secondary_bg_color"); } catch (_) {} }
+  load();
+})();
+</script>
+</body>
+</html>
